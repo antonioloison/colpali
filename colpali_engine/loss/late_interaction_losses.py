@@ -6,13 +6,9 @@ from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss
 class ColbertLoss(torch.nn.Module):
     def __init__(self, temperature: float = 0.02, normalize_scores: bool = True, multi_label=False):
         super().__init__()
-        self.ce_loss = CrossEntropyLoss()
+        self.ce_loss = CrossEntropyLoss(reduction="mean")
         self.temperature = temperature
         self.normalize_scores = normalize_scores
-        if multi_label:
-            self.ce_loss = BCEWithLogitsLoss(reduction="mean")
-        else:
-            self.ce_loss = CrossEntropyLoss(reduction="mean")
 
     def forward(self, query_embeddings, doc_embeddings, labels=None):
         """
@@ -22,18 +18,37 @@ class ColbertLoss(torch.nn.Module):
 
         scores = torch.einsum("bnd,csd->bcns", query_embeddings, doc_embeddings).max(dim=3)[0].sum(dim=2)
 
-        # scores = torch.zeros((query_embeddings.shape[0], doc_embeddings.shape[0]), device=query_embeddings.device)
-        # for i in range(query_embeddings.shape[0]):
-        #     for j in range(doc_embeddings.shape[0]):
-        #         # step 1 - dot product --> (s1,s2)
-        #         q2d_scores = torch.matmul(query_embeddings[i], doc_embeddings[j].T)
-        #         # step 2 -> max on doc  --> (s1)
-        #         q_scores = torch.max(q2d_scores, dim=1)[0]
-        #         # step 3 --> sum the max score --> (1)
-        #         sum_q_score = torch.sum(q_scores)
-        #         # step 4 --> assert is scalar
-        #         scores[i, j] = sum_q_score
-        # assert (scores_einsum - scores < 0.0001).all().item()
+        if self.normalize_scores:
+            # find lengths of non-zero query embeddings
+            # divide scores by the lengths of the query embeddings
+            scores = scores / ((query_embeddings[:, :, 0] != 0).sum(dim=1).unsqueeze(-1))
+
+            if not (scores >= 0).all().item() or not (scores <= 1).all().item():
+                raise ValueError("Scores must be between 0 and 1 after normalization")
+
+        loss_rowwise = self.ce_loss(scores / self.temperature, torch.arange(scores.shape[0], device=scores.device))
+
+        # TODO: comparing between queries might not make sense since it's a sum over the length of the query
+        # loss_columnwise = self.ce_loss(scores.T, torch.arange(scores.shape[1], device=scores.device))
+        # loss = (loss_rowwise + loss_columnwise) / 2
+        return loss_rowwise
+
+
+class MultiLabelLoss(torch.nn.Module):
+    def __init__(self, temperature: float = 0.02, normalize_scores: bool = True):
+        super().__init__()
+        self.temperature = temperature
+        self.normalize_scores = normalize_scores
+        self.loss = BCEWithLogitsLoss(reduction="mean")
+
+    def forward(self, query_embeddings, doc_embeddings, labels=None):
+        """
+        query_embeddings: (batch_size, num_query_tokens, dim)
+        doc_embeddings: (batch_size, num_doc_tokens, dim)
+        """
+
+        scores = torch.einsum("bnd,csd->bcns", query_embeddings, doc_embeddings).max(dim=3)[0].sum(dim=2)
+
         if self.normalize_scores:
             # find lengths of non-zero query embeddings
             # divide scores by the lengths of the query embeddings
@@ -43,9 +58,9 @@ class ColbertLoss(torch.nn.Module):
                 raise ValueError("Scores must be between 0 and 1 after normalization")
 
         if labels is None:
-            loss_rowwise = self.ce_loss(scores / self.temperature, torch.arange(scores.shape[0], device=scores.device))
+            raise ValueError("Labels are required for MultiLabelLoss")
         else:
-            loss_rowwise = self.ce_loss(scores / self.temperature, labels)
+            loss_rowwise = self.loss(scores / self.temperature, labels)
 
         # TODO: comparing between queries might not make sense since it's a sum over the length of the query
         # loss_columnwise = self.ce_loss(scores.T, torch.arange(scores.shape[1], device=scores.device))
