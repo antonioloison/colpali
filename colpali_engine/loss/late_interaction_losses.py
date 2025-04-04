@@ -14,7 +14,7 @@ class ColbertLoss(torch.nn.Module):
         else:
             self.ce_loss = CrossEntropyLoss(reduction="mean")
 
-    def forward(self, query_embeddings, doc_embeddings, labels = None):
+    def forward(self, query_embeddings, doc_embeddings, labels=None):
         """
         query_embeddings: (batch_size, num_query_tokens, dim)
         doc_embeddings: (batch_size, num_doc_tokens, dim)
@@ -37,15 +37,15 @@ class ColbertLoss(torch.nn.Module):
         if self.normalize_scores:
             # find lengths of non-zero query embeddings
             # divide scores by the lengths of the query embeddings
-            scores = scores/((query_embeddings[:,:,0] != 0).sum(dim=1).unsqueeze(-1))
+            scores = scores / ((query_embeddings[:, :, 0] != 0).sum(dim=1).unsqueeze(-1))
 
             if not (scores >= 0).all().item() or not (scores <= 1).all().item():
                 raise ValueError("Scores must be between 0 and 1 after normalization")
 
         if labels is None:
-            loss_rowwise = self.ce_loss(scores/self.temperature, torch.arange(scores.shape[0], device=scores.device))
+            loss_rowwise = self.ce_loss(scores / self.temperature, torch.arange(scores.shape[0], device=scores.device))
         else:
-            loss_rowwise = self.ce_loss(scores/self.temperature, labels)
+            loss_rowwise = self.ce_loss(scores / self.temperature, labels)
 
         # TODO: comparing between queries might not make sense since it's a sum over the length of the query
         # loss_columnwise = self.ce_loss(scores.T, torch.arange(scores.shape[1], device=scores.device))
