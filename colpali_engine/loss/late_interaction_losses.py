@@ -1,16 +1,20 @@
 import torch
 import torch.nn.functional as F  # noqa: N812
-from torch.nn import CrossEntropyLoss
+from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss
 
 
 class ColbertLoss(torch.nn.Module):
-    def __init__(self, temperature: float = 0.02, normalize_scores: bool = True):
+    def __init__(self, temperature: float = 0.02, normalize_scores: bool = True, multi_label=False):
         super().__init__()
         self.ce_loss = CrossEntropyLoss()
         self.temperature = temperature
         self.normalize_scores = normalize_scores
+        if multi_label:
+            self.ce_loss = BCEWithLogitsLoss(reduction="mean")
+        else:
+            self.ce_loss = CrossEntropyLoss(reduction="mean")
 
-    def forward(self, query_embeddings, doc_embeddings):
+    def forward(self, query_embeddings, doc_embeddings, labels = None):
         """
         query_embeddings: (batch_size, num_query_tokens, dim)
         doc_embeddings: (batch_size, num_doc_tokens, dim)
@@ -30,7 +34,6 @@ class ColbertLoss(torch.nn.Module):
         #         # step 4 --> assert is scalar
         #         scores[i, j] = sum_q_score
         # assert (scores_einsum - scores < 0.0001).all().item()
-
         if self.normalize_scores:
             # find lengths of non-zero query embeddings
             # divide scores by the lengths of the query embeddings
@@ -39,8 +42,14 @@ class ColbertLoss(torch.nn.Module):
             if not (scores >= 0).all().item() or not (scores <= 1).all().item():
                 raise ValueError("Scores must be between 0 and 1 after normalization")
 
-        loss_rowwise = self.ce_loss(scores/self.temperature, torch.arange(scores.shape[0], device=scores.device))
+        if labels is None:
+            loss_rowwise = self.ce_loss(scores/self.temperature, torch.arange(scores.shape[0], device=scores.device))
+        else:
+            loss_rowwise = self.ce_loss(scores/self.temperature, labels)
 
+        # TODO: comparing between queries might not make sense since it's a sum over the length of the query
+        # loss_columnwise = self.ce_loss(scores.T, torch.arange(scores.shape[1], device=scores.device))
+        # loss = (loss_rowwise + loss_columnwise) / 2
         return loss_rowwise
 
 
